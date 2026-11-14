@@ -3,7 +3,6 @@
 # This is the last level of our first season, good luck!
 
 import binascii
-import random
 import secrets
 import hashlib
 import os
@@ -17,12 +16,13 @@ class Random_generator:
     'abcdefghijklmnopqrstuvwxyz'
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     )):
-        return ''.join(random.choice(alphabet) for _ in range(length))
+        # secrets uses the OS CSPRNG; random (Mersenne Twister) is predictable
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
 
     # generates salt
     def generate_salt(self, rounds=12):
-        salt = ''.join(str(random.randint(0, 9)) for _ in range(21)) + '.'
-        return f'$2b${rounds}${salt}'.encode()
+        # bcrypt generates a full-entropy random salt with the right format
+        return bcrypt.gensalt(rounds)
 
 class SHA256_hasher:
 
@@ -38,21 +38,37 @@ class SHA256_hasher:
         password_hash = password_hash.encode('ascii')
         return bcrypt.checkpw(password, password_hash)
 
-class MD5_hasher:
+class PBKDF2_hasher:
 
-    # same as above but using a different algorithm to hash which is MD5
+    ITERATIONS = 600_000
+
+    # salted, slow, key-stretching hash (replaces the unsalted, fast MD5)
+    # stored format: iterations$salt_hex$hash_hex
     def password_hash(self, password):
-        return hashlib.md5(password.encode()).hexdigest()
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, self.ITERATIONS)
+        return f'{self.ITERATIONS}${salt.hex()}${digest.hex()}'
 
     def password_verification(self, password, password_hash):
-        password = self.password_hash(password)
-        return secrets.compare_digest(password.encode(), password_hash.encode())
+        try:
+            iterations, salt_hex, hash_hex = password_hash.split('$')
+            digest = hashlib.pbkdf2_hmac(
+                'sha256', password.encode(), bytes.fromhex(salt_hex), int(iterations))
+        except ValueError:
+            return False
+        # constant-time comparison
+        return secrets.compare_digest(digest.hex(), hash_hex)
+
+# kept so existing callers and tests that reference the old name keep working;
+# it no longer uses MD5 at all
+MD5_hasher = PBKDF2_hasher
 
 # a collection of sensitive secrets necessary for the software to operate
 PRIVATE_KEY = os.environ.get('PRIVATE_KEY')
 PUBLIC_KEY = os.environ.get('PUBLIC_KEY')
-SECRET_KEY = 'TjWnZr4u7x!A%D*G-KaPdSgVkXp2s5v8'
-PASSWORD_HASHER = 'MD5_hasher'
+# secrets must never be committed to source control: load them from the environment
+SECRET_KEY = os.environ.get('SECRET_KEY')
+PASSWORD_HASHER = 'PBKDF2_hasher'
 
 
 # Contribute new levels to the game in 3 simple steps!
