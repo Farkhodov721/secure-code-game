@@ -12,18 +12,31 @@ Follow the instructions below to get started:
 '''
 
 from collections import namedtuple
+from decimal import Decimal
 
 Order = namedtuple('Order', 'id, items')
 Item = namedtuple('Item', 'type, description, amount, quantity')
 
+# Upper bound for the total value of the products in a single order
+MAX_ORDER_TOTAL = Decimal('1e6')
+
 def validorder(order: Order):
-    net = 0
+    # Decimal gives exact arithmetic: no float rounding (1.1 + 2.2 != 3.3)
+    # and no precision loss on huge values (1e19 - 1000 - 1e19 == 0).
+    # str() first so a float like 1.1 is not converted with its binary error.
+    net = Decimal('0')
+    products_total = Decimal('0')
 
     for item in order.items:
         if item.type == 'payment':
-            net += item.amount
+            net += Decimal(str(item.amount))
         elif item.type == 'product':
-            net -= item.amount * item.quantity
+            cost = Decimal(str(item.amount)) * Decimal(str(item.quantity))
+            products_total += cost
+            net -= cost
+            # Limit the order size regardless of the item/payment order
+            if abs(products_total) > MAX_ORDER_TOTAL:
+                return 'Total amount payable for an order exceeded'
         else:
             return "Invalid item type: %s" % item.type
 
