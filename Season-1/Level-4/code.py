@@ -9,6 +9,7 @@ If you like to return to the initial state of the database, please delete the da
 the tests.py again to recreate it.
 '''
 
+import re
 import sqlite3
 import os
 from flask import Flask, request
@@ -24,6 +25,17 @@ def source():
     DB_CRUD_ops().exec_user_script(request.args["input"])
 ### Unrelated to the exercise -- Ends here -- Please ignore
 
+# A stock symbol is a short token of letters, digits and dots (e.g. MSFT, BRK.B)
+SYMBOL_PATTERN = re.compile(r"[A-Za-z0-9.]{1,10}")
+
+def clean_symbol(stock_symbol):
+    """Returns the leading ticker token of the input, or None if there is none.
+    Anything after the ticker (quotes, semicolons, SQL) is dropped, never executed."""
+    if not isinstance(stock_symbol, str):
+        return None
+    m = SYMBOL_PATTERN.match(stock_symbol.strip())
+    return m.group(0) if m else None
+
 class Connect(object):
 
     # helper function creating database with the connection
@@ -31,6 +43,15 @@ class Connect(object):
         connection = None
         try:
             connection = sqlite3.connect(path)
+        except sqlite3.Error as e:
+            print(f"ERROR: {e}")
+        return connection
+
+    # read-only connection: even a successful injection cannot modify data
+    def create_readonly_connection(self, path):
+        connection = None
+        try:
+            connection = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
         except sqlite3.Error as e:
             print(f"ERROR: {e}")
         return connection
@@ -106,7 +127,8 @@ class DB_CRUD_ops(object):
                 # res += "[SANITIZED_QUERY]" + sanitized_query + "\n"
                 res += "CONFIRM THAT THE ABOVE QUERY IS NOT MALICIOUS TO EXECUTE"
             else:
-                cur.execute(query)
+                # parameterised: the symbol is data, never part of the SQL text
+                cur.execute("SELECT * FROM stocks WHERE symbol = ?", (stock_symbol,))
 
                 query_outcome = cur.fetchall()
                 for result in query_outcome:
@@ -133,16 +155,16 @@ class DB_CRUD_ops(object):
             cur = db_con.cursor()
 
             res = "[METHOD EXECUTED] get_stock_price\n"
-            query = "SELECT price FROM stocks WHERE symbol = '" + stock_symbol + "'"
-            res += "[QUERY] " + query + "\n"
-            if ';' in query:
-                res += "[SCRIPT EXECUTION]\n"
-                cur.executescript(query)
-            else:
-                cur.execute(query)
-                query_outcome = cur.fetchall()
-                for result in query_outcome:
-                    res += "[RESULT] " + str(result) + "\n"
+            symbol = clean_symbol(stock_symbol)
+            if symbol is None:
+                res += "ERROR: invalid stock symbol\n"
+                return res
+            # the displayed query is only a log line; the executed one is parameterised
+            res += "[QUERY] SELECT price FROM stocks WHERE symbol = '" + symbol + "'\n"
+            cur.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
+            query_outcome = cur.fetchall()
+            for result in query_outcome:
+                res += "[RESULT] " + str(result) + "\n"
             return res
 
         except sqlite3.Error as e:
@@ -167,10 +189,12 @@ class DB_CRUD_ops(object):
 
             res = "[METHOD EXECUTED] update_stock_price\n"
             # UPDATE stocks SET price = 310.0 WHERE symbol = 'MSFT'
-            query = "UPDATE stocks SET price = '%d' WHERE symbol = '%s'" % (price, stock_symbol)
-            res += "[QUERY] " + query + "\n"
+            symbol = clean_symbol(stock_symbol)
+            if symbol is None:
+                raise Exception("ERROR: invalid stock symbol")
+            res += "[QUERY] UPDATE stocks SET price = '%d' WHERE symbol = '%s'\n" % (price, symbol)
 
-            cur.execute(query)
+            cur.execute("UPDATE stocks SET price = ? WHERE symbol = ?", (price, symbol))
             db_con.commit()
             query_outcome = cur.fetchall()
             for result in query_outcome:
@@ -194,15 +218,18 @@ class DB_CRUD_ops(object):
         try:
             path = os.path.dirname(os.path.abspath(__file__))
             db_path = os.path.join(path, 'level-4.db')
-            db_con = con.create_connection(db_path)
+            db_con = con.create_readonly_connection(db_path)
             cur = db_con.cursor()
 
             res = "[METHOD EXECUTED] exec_multi_query\n"
             for query in filter(None, query.split(';')):
                 res += "[QUERY]" + query + "\n"
                 query = query.strip()
+                # only plain SELECTs, one statement at a time, on a read-only connection
+                if not query.upper().startswith("SELECT"):
+                    res += "ERROR: only SELECT statements are allowed\n"
+                    break
                 cur.execute(query)
-                db_con.commit()
 
                 query_outcome = cur.fetchall()
                 for result in query_outcome:
@@ -225,18 +252,16 @@ class DB_CRUD_ops(object):
         try:
             path = os.path.dirname(os.path.abspath(__file__))
             db_path = os.path.join(path, 'level-4.db')
-            db_con = con.create_connection(db_path)
+            db_con = con.create_readonly_connection(db_path)
             cur = db_con.cursor()
 
             res = "[METHOD EXECUTED] exec_user_script\n"
             res += "[QUERY] " + query + "\n"
-            if ';' in query:
-                res += "[SCRIPT EXECUTION]"
-                cur.executescript(query)
-                db_con.commit()
+            # no executescript(): a single read-only SELECT only
+            if ';' in query or not query.strip().upper().startswith("SELECT"):
+                res += "ERROR: only a single SELECT statement is allowed"
             else:
                 cur.execute(query)
-                db_con.commit()
                 query_outcome = cur.fetchall()
                 for result in query_outcome:
                     res += "[RESULT] " + str(result)
