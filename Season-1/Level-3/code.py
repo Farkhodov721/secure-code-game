@@ -24,9 +24,10 @@ def _safe_path(path, base_dir=BASE_DIR):
     # relative inputs are interpreted relative to base_dir; absolute inputs are
     # still accepted but must resolve inside base_dir
     resolved = os.path.realpath(os.path.join(base, path))
-    if os.path.commonpath([base, resolved]) != base:
-        return None
-    return resolved
+    # the trailing separator stops sibling dirs like "<base>-evil" from matching
+    if resolved.startswith(base + os.sep):
+        return resolved
+    return None
 
 class TaxPayer:
 

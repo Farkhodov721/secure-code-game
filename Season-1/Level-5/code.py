@@ -2,7 +2,6 @@
 
 # This is the last level of our first season, good luck!
 
-import binascii
 import secrets
 import hashlib
 import os
@@ -28,13 +27,20 @@ class SHA256_hasher:
 
     # produces the password hash by combining password + salt because hashing
     def password_hash(self, password, salt):
-        password = binascii.hexlify(hashlib.sha256(password.encode()).digest())
+        # bcrypt is a purpose-built, slow, salted password hash; no fast
+        # SHA-256 pre-hash. bcrypt only reads the first 72 bytes, so refuse
+        # longer input instead of silently truncating it.
+        password = password.encode()
+        if len(password) > 72:
+            raise ValueError("password must not exceed 72 bytes")
         password_hash = bcrypt.hashpw(password, salt)
         return password_hash.decode('ascii')
 
     # verifies that the hashed password reverses to the plain text version on verification
     def password_verification(self, password, password_hash):
-        password = binascii.hexlify(hashlib.sha256(password.encode()).digest())
+        password = password.encode()
+        if len(password) > 72:
+            return False
         password_hash = password_hash.encode('ascii')
         return bcrypt.checkpw(password, password_hash)
 

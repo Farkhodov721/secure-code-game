@@ -36,6 +36,25 @@ def clean_symbol(stock_symbol):
     m = SYMBOL_PATTERN.match(stock_symbol.strip())
     return m.group(0) if m else None
 
+# The only query shapes the "free text" helpers accept. User text selects one of
+# these fixed templates and only supplies the symbol as a bound parameter.
+SELECT_PATTERN = re.compile(
+    r"SELECT\s+(price|\*)\s+FROM\s+stocks\s+WHERE\s+symbol\s*=\s*'([A-Za-z0-9.]{1,10})'",
+    re.IGNORECASE)
+SELECT_TEMPLATES = {
+    'price': "SELECT price FROM stocks WHERE symbol = ?",
+    '*': "SELECT * FROM stocks WHERE symbol = ?",
+}
+
+def run_select(cur, statement):
+    """Runs a statement only if it matches a known SELECT shape. Returns the
+    rows, or None if the statement is not allowed."""
+    m = SELECT_PATTERN.fullmatch(statement.strip())
+    if m is None:
+        return None
+    cur.execute(SELECT_TEMPLATES[m.group(1).lower()], (m.group(2),))
+    return cur.fetchall()
+
 class Connect(object):
 
     # helper function creating database with the connection
@@ -225,13 +244,11 @@ class DB_CRUD_ops(object):
             for query in filter(None, query.split(';')):
                 res += "[QUERY]" + query + "\n"
                 query = query.strip()
-                # only plain SELECTs, one statement at a time, on a read-only connection
-                if not query.upper().startswith("SELECT"):
+                # only known SELECT shapes, one statement at a time, read-only connection
+                query_outcome = run_select(cur, query)
+                if query_outcome is None:
                     res += "ERROR: only SELECT statements are allowed\n"
                     break
-                cur.execute(query)
-
-                query_outcome = cur.fetchall()
                 for result in query_outcome:
                     res += "[RESULT] " + str(result) + " "
             return res
@@ -257,12 +274,11 @@ class DB_CRUD_ops(object):
 
             res = "[METHOD EXECUTED] exec_user_script\n"
             res += "[QUERY] " + query + "\n"
-            # no executescript(): a single read-only SELECT only
-            if ';' in query or not query.strip().upper().startswith("SELECT"):
+            # no executescript(): a single known SELECT shape only
+            query_outcome = None if ';' in query else run_select(cur, query)
+            if query_outcome is None:
                 res += "ERROR: only a single SELECT statement is allowed"
             else:
-                cur.execute(query)
-                query_outcome = cur.fetchall()
                 for result in query_outcome:
                     res += "[RESULT] " + str(result)
             return res
